@@ -1,5 +1,4 @@
-
-
+import argparse
 import numpy as np
 import os
 import pandas as pd
@@ -332,12 +331,19 @@ def get_data_from_brewersfriend(output_path_base, chunk_percent = 0.005):
     return True
 
 if __name__ == '__main__':
-    print('Beginning data pull from Brewersfriend.')
     
-    output_path_base = 'Data/brewersfriend'
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Get Recipe Data")
+    parser.add_argument('--output-dir', '-o', type=str, default='Data/brewersfriend', help="Path to the output directory.")
+    parser.add_argument('--chunk-percent', type=float, default=0.005, help="The percentage frequency at which recipes should be saved.")
+    args = parser.parse_args()
+
+    print('Beginning data pull from Brewersfriend.')
+    output_path_base = args.output_dir
     Path(output_path_base).mkdir(parents=True, exist_ok=True)
 
-    if get_data_from_brewersfriend(output_path_base):
+    chunk_percent = args.chunk_percent
+    if get_data_from_brewersfriend(output_path_base, chunk_percent):
         print(f'Data pull successful. Files were printed in {output_path_base}')
     else:
         print('Error occured during processing. Exiting.')

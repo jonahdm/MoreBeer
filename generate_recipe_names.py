@@ -1,13 +1,11 @@
 import argparse
 from dataclasses import dataclass
-import json
 import math
-import numpy as np
 import os
 import pandas as pd
 from pathlib import Path
-import random
 import re
+from sys import exit
 from time import time
 
 import torch
@@ -82,6 +80,8 @@ def split_df_into_train_test(df, train_proportion = 0.9):
     
     return training_df, testing_df
 
+# The functions below are taken directly from Andrej Karpathy's MakeMore, accessed at https://github.com/karpathy/makemore/ on 12/12/2023
+# (Thank you Andrej!)
 @dataclass
 class ModelConfig:
     block_size: int = None # length of the input sequences of integers
@@ -342,31 +342,28 @@ def print_samples(num=10):
             print(word)
     print('-'*80)
 
-
-
-
 if __name__=="__main__":
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Generate Recipe Names")
-    parser.add_argument('--input-dir', '-i', type=str, default='Data', help="Path to the input directory")
-    parser.add_argument('--output-dir', '-o', type=str, default='Models/NameGenerator', help="Path to the output directory")
+    parser.add_argument('--input-dir', '-i', type=str, default='Data', help="Path to the input directory.")
+    parser.add_argument('--output-dir', '-o', type=str, default='Models/NameGenerator', help="Path to the output directory.")
     # Argparse inverts the values of False and True when stored using "action =". Not sure why.
-    parser.add_argument('--resume', action='store_false', help="when this flag is used, we will resume optimization from existing model in the workdir")
-    parser.add_argument('--sample-only', action='store_true', help="just sample from the model and quit, don't train")
-    parser.add_argument('--num-workers', '-n', type=int, default=4, help="number of data workers for both train/test")
-    parser.add_argument('--max-steps', type=int, default=5000, help="max number of optimization steps to run for, or -1 for infinite.")
-    parser.add_argument('--device', type=str, default='cuda', help="device to use for compute, examples: cpu|cuda|cuda:2|mps")
-    parser.add_argument('--seed', type=int, default=76834, help="seed")
-    parser.add_argument('--top-k', type=int, default=-1, help="top-k for sampling, -1 means no top-k")
-    parser.add_argument('--type', type=str, default='transformer', help="model class type to use")
-    parser.add_argument('--n-layer', type=int, default=4, help="number of layers")
-    parser.add_argument('--n-head', type=int, default=4, help="number of heads (in a transformer)")
-    parser.add_argument('--n-embd', type=int, default=64, help="number of feature channels in the model")
-    parser.add_argument('--n-embd2', type=int, default=64, help="number of feature channels elsewhere in the model")
-    parser.add_argument('--batch-size', '-b', type=int, default=32, help="batch size during optimization")
-    parser.add_argument('--learning-rate', '-l', type=float, default=5e-4, help="learning rate")
-    parser.add_argument('--weight-decay', '-w', type=float, default=0.01, help="weight decay")
+    parser.add_argument('--resume', action='store_false', help="When True, the last saved model will be used.")
+    parser.add_argument('--sample-only', action='store_true', help="When True, the script will only sample from an existing model, not create a new one.")
+    parser.add_argument('--num-workers', '-n', type=int, default=4, help="The number of sub-processors to allow PyTorch to use in training/testing. More workers means more memory usage.")
+    parser.add_argument('--max-steps', type=int, default=5000, help="How many steps of training/testing optimization should be run. A value of -1 will result in infinite steps.")
+    parser.add_argument('--device', type=str, default='cuda', help="The device to use for computing. Options are: 'cpu,' 'cuda', 'cuda:2', or 'mps'.")
+    parser.add_argument('--seed', type=int, default=76834, help="Random seed.")
+    parser.add_argument('--top-k', type=int, default=-1, help="Used to return the largest K values during sampling. A value of -1 will result in no top-K sampling.")
+    parser.add_argument('--type', type=str, default='transformer', help="What type of model should be used. 'transformer' is currently the only option")
+    parser.add_argument('--n-layer', type=int, default=4, help="The number of layers (blocks) in the model.")
+    parser.add_argument('--n-head', type=int, default=4, help="The number of heads for multi-head attention (Transformer model).")
+    parser.add_argument('--n-embd', type=int, default=64, help="The number of feature embeddings used in the model.")
+    parser.add_argument('--n-embd2', type=int, default=64, help="The number of secondary feature embeddings used in the model (Unused by Transformer model).")
+    parser.add_argument('--batch-size', '-b', type=int, default=32, help="The number of batches to be simultaneously run during training/testing optimization.")
+    parser.add_argument('--learning-rate', '-l', type=float, default=5e-4, help="The optimizaer learning rate.")
+    parser.add_argument('--weight-decay', '-w', type=float, default=0.01, help="The optimizaer weight decay.")
     args = parser.parse_args()
     
     # Set up system
@@ -375,22 +372,15 @@ if __name__=="__main__":
     
     output_path_base = args.output_dir
     Path(output_path_base).mkdir(parents=True, exist_ok=True)
-    writer = SummaryWriter(output_path_base)
+    
+    writer_output_path = f'{output_path_base}/Writer'
+    Path(writer_output_path).mkdir(parents=True, exist_ok=True)
+    writer = SummaryWriter(writer_output_path)
     
     input_path_basse = args.input_dir
     
-    # JSON formatted BJCP Style guides downloaded from : https://github.com/beerjson/bjcp-json/
-    with open(f'{input_path_basse}/styleguides/bjcp_styleguide-2021.json', encoding = 'cp850') as f:
-        bjcp_2021 = json.load(f)
-        f.close()
-    bjcp_2021_styles = bjcp_2021['beerjson']['styles']
-
     recipe_metadata = pd.read_csv(f'{input_path_basse}/brewersfriend/metadata.csv')
     
-    # Make sure we're only looking at recipes which are labeled properly with the BJACP Style guide
-    # TODO: Uncategorized beer makes up the second largest proportion of styles, after IPAs. There's potential here for testing future classification models.
-    recipe_metadata = recipe_metadata[(recipe_metadata['style_guide'] == 'BJCP') & (recipe_metadata['style_category_number'] != 0)] 
-
     # Clean recipe names
     recipe_metadata = clean_recipe_names(recipe_metadata)
     recipe_metadta = recipe_metadata.drop_duplicates(subset = ['recipe_name'])
