@@ -25,7 +25,7 @@ The best version of each model type created is saved as a PyTorch file under Mod
 This code should be relatively plug-and-play, as long as all packages are properly installed. Do note that obtaining the recipe data will take a very long run time, and care should be taken with any deployment so as not to overload BrewersFriends wtih too many requests.
 
 ## License
-This project is licensed under the MIT License - see the LICENSE.md file for details
+This project is licensed under the MIT License - see the (LICENSE.md)[https://github.com/jonahdm/MoreBeer/blob/c0a7004e4c1314cabc11f7c8d62a49ea9a0ba97a/LICENSE.md] file for details.
 
 ## Acknowledgments
 * [Andrej Karpathy](https://karpathy.ai/) for his incredible resources and tutorials regarding machine learning.
