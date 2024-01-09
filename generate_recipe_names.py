@@ -1,5 +1,6 @@
 import argparse
 from dataclasses import dataclass
+import json
 import math
 import os
 import pandas as pd
@@ -80,6 +81,33 @@ def split_df_into_train_test(df, train_proportion = 0.9):
     
     return training_df, testing_df
 
+def load_bjcp_styles(json_file_path):
+    '''
+    Loads the 2021 BJCP JSON styleguide obtained from https://github.com/beerjson/bjcp-json
+    TODO: Create a data class, and migrate this function into it.
+        
+    Parameters
+    ----------
+    file_path : str
+        The file path to the BJCP style guide JSON to be read.
+        
+    Returns
+    -------
+    styles_dict : dict
+        A dictionary of BJCP styles indexed by the style id (ex. '1A', '16D', 'X1')
+
+    '''
+
+    with open(json_file_path, encoding = 'cp850') as bjcp_file:
+        styles_list = json.load(bjcp_file)
+    
+    styles_list = styles_list['beerjson']['styles']
+    styles_index = [i['style_id'] for i in styles_list]
+    
+    styles_dict = {k:v for (k, v) in zip(styles_index, styles_list)}
+    
+    return styles_dict
+    
 # The functions below are taken directly from Andrej Karpathy's MakeMore, accessed at https://github.com/karpathy/makemore/ on 12/12/2023
 # (Thank you Andrej!)
 @dataclass
@@ -383,7 +411,15 @@ if __name__=="__main__":
     
     # Clean recipe names
     recipe_metadata = clean_recipe_names(recipe_metadata)
-    recipe_metadta = recipe_metadata.drop_duplicates(subset = ['recipe_name'])
+    recipe_metadata = recipe_metadata.drop_duplicates(subset = ['recipe_name'])
+    
+    # Clean recipe metadat to only include those tagged with proper BJCP styles
+    # TODO: There may be some error here if beers were entered with earlier BJCP styles. Conversion from 2015 and 2017 guidelines to 2019 guidelines might be necessary.
+    recipe_metadata = recipe_metadata[recipe_metadata['style_guide'] == 'BJCP']
+    recipe_metadata['recipe_bjcp_style_id'] = recipe_metadata['style_category_number'].astype(str) + recipe_metadata['style_letter']
+    
+    bjcp_2019_styles = load_bjcp_styles('Data/styleguides/bjcp_styleguide-2021.json')
+    recipe_metadata = recipe_metadata[recipe_metadata['recipe_bjcp_style_id'].isin(list(bjcp_2019_styles.keys()))] 
     
     # Get necessary model variables from recipe name data, and creating training/testing datasets
     largest_recipe_len = recipe_metadata['recipe_name'].map(len).max()
