@@ -1,5 +1,6 @@
 import argparse
 from dataclasses import dataclass
+from itertools import chain
 import json
 import math
 import os
@@ -49,7 +50,7 @@ def clean_recipe_names(recipe_df, column_name = 'recipe_name', remove_parantheti
     
     return recipe_df
 
-def split_df_into_train_test(df, train_proportion = 0.9): 
+def split_df_into_train_test(df, train_proportion = 0.8585): 
     '''
     Creates two randomly sampled and specificaly proportioned DataFrames from an input.
     TODO: Create a data class, and migrate this function into it.
@@ -69,16 +70,17 @@ def split_df_into_train_test(df, train_proportion = 0.9):
         A randomly selected number of rows from the input data frame.
 
     '''
-    df_size = df.index.size
+    df_size = len(df)
+
     train_size = int(train_proportion * df_size)
-        
+
     random_indicies = torch.randperm(df_size).tolist()
     train_indices = random_indicies[:train_size]
     test_indices = random_indicies[train_size:]
     
-    training_df = df[df.index.isin(train_indices)]
-    testing_df = df[df.index.isin(test_indices)]
-    
+    training_df = df.iloc[train_indices]
+    testing_df = df.iloc[test_indices]
+        
     return training_df, testing_df
 
 def load_bjcp_styles(json_file_path):
@@ -209,7 +211,7 @@ class Transformer(nn.Module):
 
         # report number of parameters (note we don't count the decoder parameters in lm_head)
         n_params = sum(p.numel() for p in self.transformer.parameters())
-        print("number of parameters: %.2fM" % (n_params/1e6,))
+        print("Number of parameters: %.2fM" % (n_params/1e6,))
 
     def get_block_size(self):
         return self.block_size
@@ -254,12 +256,13 @@ def evaluate(model, dataset, batch_size=50, max_batches=None):
 
 class CharDataset(Dataset):
 
-    def __init__(self, words, chars, max_word_length):
+    def __init__(self, words, chars, max_word_length, style_dict):
         self.words = words
         self.chars = chars
         self.max_word_length = max_word_length
         self.stoi = {ch:i+1 for i,ch in enumerate(chars)}
         self.itos = {i:s for s,i in self.stoi.items()} # inverse mapping
+        self.style_dict = style_dict
 
     def __len__(self):
         return len(self.words)
@@ -274,6 +277,10 @@ class CharDataset(Dataset):
         return self.max_word_length + 1 # <START> token followed by words
 
     def encode(self, word):
+        word = [cha for cha in re.split('(<.*?>)', word) if cha] # Takes escape tokens between <> as individual characters
+        word = [[cha] if re.search('[<>]', cha) else list(cha) for cha in word] # This makes a list of lists that looks something like [[<1A>], ['B', 'e', 'e', 'r']]
+        word = list(chain(*word)) # This flattens the list of lists into a single list, while still keeping each <> character as an individual character!
+        
         ix = torch.tensor([self.stoi[w] for w in word], dtype=torch.long)
         return ix
 
@@ -349,6 +356,8 @@ def print_samples(num=10):
     steps = training_dataset.get_output_length() - 1 #because we already start with <START> token (index 0)
     X_samp = generate(model, X_init, steps, top_k=top_k, do_sample=True).to('cuda')
     train_samples, test_samples, new_samples = [], [], []
+    train_styles, test_styles, new_styles = [], [], []
+    sample_styles = []
     for i in range(X_samp.size(0)):
         # get the i'th row of sampled integers, as python list
         row = X_samp[i, 1:].tolist() # note: we need to crop out the first <START> token
@@ -356,18 +365,28 @@ def print_samples(num=10):
         crop_index = row.index(0) if 0 in row else len(row)
         row = row[:crop_index]
         word_samp = training_dataset.decode(row)
+        
+        # Remove the special recipe type tags from the final name
+        style_samp = re.search('<.*?>', word_samp)[0]
+        style_samp = re.sub('[<>]', '', style_samp)
+        style_samp = training_dataset.style_dict[style_samp]
+        word_samp = re.sub('<.*?>', '', word_samp)
+        
         # separately track samples that we have and have not seen before
         if training_dataset.contains(word_samp):
             train_samples.append(word_samp)
+            train_styles.append(style_samp)
         elif testing_dataset.contains(word_samp):
             test_samples.append(word_samp)
+            test_styles.append(style_samp)
         else:
             new_samples.append(word_samp)
+            new_styles.append(style_samp)
     print('-'*80)
-    for lst, desc in [(train_samples, 'in train'), (test_samples, 'in test'), (new_samples, 'new')]:
-        print(f"{len(lst)} samples that are {desc}:")
-        for word in lst:
-            print(word)
+    for sample_list, style_list, desc in [(train_samples, train_styles, 'in traiing dataset'), (test_samples, test_styles, 'in testing dataset'), (new_samples, new_styles, 'new')]:
+        print(f"{len(sample_list)} samples that are {desc}:")
+        for i in range(0, len(sample_list)):
+            print(f'{style_list[i]}: {sample_list[i]}')
     print('-'*80)
 
 if __name__=="__main__":
@@ -416,18 +435,35 @@ if __name__=="__main__":
     # Clean recipe metadat to only include those tagged with proper BJCP styles
     # TODO: There may be some error here if beers were entered with earlier BJCP styles. Conversion from 2015 and 2017 guidelines to 2019 guidelines might be necessary.
     recipe_metadata = recipe_metadata[recipe_metadata['style_guide'] == 'BJCP']
-    recipe_metadata['recipe_bjcp_style_id'] = recipe_metadata['style_category_number'].astype(str) + recipe_metadata['style_letter']
+    recipe_metadata['bjcp_style_id'] = recipe_metadata['style_category_number'].astype(str) + recipe_metadata['style_letter']
     
     bjcp_2019_styles = load_bjcp_styles('Data/styleguides/bjcp_styleguide-2021.json')
-    recipe_metadata = recipe_metadata[recipe_metadata['recipe_bjcp_style_id'].isin(list(bjcp_2019_styles.keys()))] 
+    style_dict = {k:v['name'] for k, v in bjcp_2019_styles.items()} # This is formatted as {'1A': 'American Light Lager'} and will be used for translating during sampling
+    bjcp_2019_styles_list = sorted(list(bjcp_2019_styles.keys()))
+    recipe_metadata = recipe_metadata[recipe_metadata['bjcp_style_id'].isin(bjcp_2019_styles_list)] 
     
     # Get necessary model variables from recipe name data, and creating training/testing datasets
-    largest_recipe_len = recipe_metadata['recipe_name'].map(len).max()
+   # largest_recipe_len = recipe_metadata['recipe_name'].map(len).max()
     recipe_name_chars = sorted(list(set(''.join(recipe_metadata['recipe_name']))))
-
-    training_metadata, testing_metadata = split_df_into_train_test(recipe_metadata)
-    training_dataset = CharDataset(training_metadata['recipe_name'].tolist(), recipe_name_chars, largest_recipe_len)
-    testing_dataset = CharDataset(testing_metadata['recipe_name'].tolist(), recipe_name_chars, largest_recipe_len)
+    recipe_special_chars = [f'<{val}>' for val in bjcp_2019_styles_list]
+    recipe_name_chars = recipe_special_chars + recipe_name_chars
+    
+    recipe_metadata['style_prefixed_recipe_name'] = [f'<{val}>' for val in recipe_metadata['bjcp_style_id']] + recipe_metadata['recipe_name']
+    largest_recipe_len = recipe_metadata['style_prefixed_recipe_name'].map(len).max()
+    
+    training_metadata = pd.DataFrame(columns = recipe_metadata.columns)
+    testing_metadata = pd.DataFrame(columns = recipe_metadata.columns)
+    
+    # We want to make sure that training/testing data is evenly split within the style groups
+    for this_style in bjcp_2019_styles_list:
+        this_metadata = recipe_metadata[recipe_metadata['bjcp_style_id'] == this_style]
+        this_training_metadata, this_testing_metadata = split_df_into_train_test(this_metadata)
+        
+        training_metadata = pd.concat([training_metadata, this_training_metadata])
+        testing_metadata = pd.concat([testing_metadata, this_testing_metadata])
+        
+    training_dataset = CharDataset(training_metadata['style_prefixed_recipe_name'].tolist(), recipe_name_chars, largest_recipe_len, style_dict)
+    testing_dataset = CharDataset(testing_metadata['style_prefixed_recipe_name'].tolist(), recipe_name_chars, largest_recipe_len, style_dict)
 
     vocab_size = training_dataset.get_vocab_size()
     block_size = training_dataset.get_output_length()
@@ -438,7 +474,7 @@ if __name__=="__main__":
 
     model = Transformer(this_model_config) # If more models are added, they should be selected here
     model.to(args.device)
-    model_file_name = f'{output_path_base}/gen_recipe_name_{args.type}.pt'
+    model_file_name = f'{output_path_base}/{args.type}.pt'
     
     if args.resume or args.sample_only:
         if os.path.isfile(model_file_name):    
