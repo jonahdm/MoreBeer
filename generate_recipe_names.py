@@ -348,16 +348,29 @@ def generate(model, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k
 
     return idx
 
-def print_samples(num=10):
+def print_samples(num=10, style_selection = None):
     """ samples from the model and pretty prints the decoded samples """
     X_init = torch.zeros(num, 1, dtype=torch.long).to('cuda')
    # top_k = args.top_k if args.top_k != -1 else None
     top_k = None
-    steps = training_dataset.get_output_length() - 1 #because we already start with <START> token (index 0)
+    
+    if style_selection:
+        if f'<{style_selection}>' in testing_dataset.stoi:
+            style_i = testing_dataset.stoi[f'<{style_selection}>']
+            style_init = (torch.ones(num, 1, dtype=torch.long)*style_i).to('cuda')
+            X_init = torch.cat((X_init, style_init), dim = 1)
+            
+            steps = training_dataset.get_output_length() - 2 #because we already start with <START> token (index 0) AND Style Start <#X> token
+        else:
+            print(f'Error: Could not find specified style "{style_selection}" defined by BJCP 2019 standards.\n'
+                  f'Generating recipe names from random styles.')
+            steps = training_dataset.get_output_length() - 1 #because we already start with <START> token (index 0)
+
+    else:
+        steps = training_dataset.get_output_length() - 1 #because we already start with <START> token (index 0)
     X_samp = generate(model, X_init, steps, top_k=top_k, do_sample=True).to('cuda')
     train_samples, test_samples, new_samples = [], [], []
     train_styles, test_styles, new_styles = [], [], []
-    sample_styles = []
     for i in range(X_samp.size(0)):
         # get the i'th row of sampled integers, as python list
         row = X_samp[i, 1:].tolist() # note: we need to crop out the first <START> token
@@ -367,7 +380,7 @@ def print_samples(num=10):
         word_samp = training_dataset.decode(row)
         
         # Remove the special recipe type tags from the final name
-        style_samp = re.search('<.*?>', word_samp)[0]
+        style_samp = re.search('<.*?>', word_samp)[0] # Note that this will only ever translate one recipe tag per generated name.
         style_samp = re.sub('[<>]', '', style_samp)
         style_samp = training_dataset.style_dict[style_samp]
         word_samp = re.sub('<.*?>', '', word_samp)
@@ -383,10 +396,11 @@ def print_samples(num=10):
             new_samples.append(word_samp)
             new_styles.append(style_samp)
     print('-'*80)
-    for sample_list, style_list, desc in [(train_samples, train_styles, 'in traiing dataset'), (test_samples, test_styles, 'in testing dataset'), (new_samples, new_styles, 'new')]:
-        print(f"{len(sample_list)} samples that are {desc}:")
-        for i in range(0, len(sample_list)):
-            print(f'{style_list[i]}: {sample_list[i]}')
+    for sample_list, style_list, desc in [(train_samples, train_styles, 'in training dataset'), (test_samples, test_styles, 'in testing dataset'), (new_samples, new_styles, 'new')]:
+        if sample_list:
+            print(f"{len(sample_list)} recipe names that are {desc}:")
+            for i in range(0, len(sample_list)):
+                print(f'{style_list[i]}: {sample_list[i]}')
     print('-'*80)
 
 if __name__=="__main__":
@@ -398,6 +412,7 @@ if __name__=="__main__":
     # Argparse inverts the values of False and True when stored using "action =". Not sure why.
     parser.add_argument('--resume', action='store_false', help="When True, the last saved model will be used.")
     parser.add_argument('--sample-only', action='store_true', help="When True, the script will only sample from an existing model, not create a new one.")
+    parser.add_argument('--style-selection', type=str, default = '', help = "When set to a BJCP defined style ID (ex. '1A', '25B', 'X5') will only generate names for that style type.")
     parser.add_argument('--num-workers', '-n', type=int, default=4, help="The number of sub-processors to allow PyTorch to use in training/testing. More workers means more memory usage.")
     parser.add_argument('--max-steps', type=int, default=5000, help="How many steps of training/testing optimization should be run. A value of -1 will result in infinite steps.")
     parser.add_argument('--device', type=str, default='cuda', help="The device to use for computing. Options are: 'cpu,' 'cuda', 'cuda:2', or 'mps'.")
@@ -427,6 +442,8 @@ if __name__=="__main__":
     input_path_basse = args.input_dir
     
     recipe_metadata = pd.read_csv(f'{input_path_basse}/brewersfriend/metadata.csv')
+    
+    style_selection = args.style_selection if args.style_selection else None
     
     # Clean recipe names
     recipe_metadata = clean_recipe_names(recipe_metadata)
@@ -484,7 +501,7 @@ if __name__=="__main__":
            print(f"Warning: Could not find existing model {model_file_name}. Starting with new model.")
            
     if args.sample_only:
-        print_samples(num=50)
+        print_samples(num=50, style_selection = style_selection)
         exit()
     
     print('Creating optimizer')
@@ -537,7 +554,7 @@ if __name__=="__main__":
 
         # sample from the model
         if step > 0 and step % 200 == 0:
-            print_samples(num=10)
+            print_samples(num=10, style_selection = style_selection)
 
         step += 1
         # termination conditions
