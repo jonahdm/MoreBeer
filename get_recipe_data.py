@@ -1,4 +1,5 @@
 import argparse
+from dateutil.parser import parse
 import numpy as np
 import os
 import pandas as pd
@@ -92,7 +93,7 @@ def split_and_print_recipes(recipes, output_path_base):
     '''
     # Reminder: Beer-XML units are: kg (mass), L (volumne), C (temperature), min (time), kPa (pressure), and ppm (water chemistry)
     
-    full_metadata_df = pd.DataFrame(columns = ['recipe_id', 'recipe_name', 'brewer', 'recipe_type', 'review_score', 'review_count', 'category', 'style_category_number', 'style_letter', 'style_guide', 'style_type', 'batch_size', 'boil_size', 'boil_time',
+    full_metadata_df = pd.DataFrame(columns = ['recipe_id', 'recipe_name', 'brewer', 'creation_date', 'recipe_type', 'review_score', 'review_count', 'category', 'style_category_number', 'style_letter', 'style_guide', 'style_type', 'batch_size', 'boil_size', 'boil_time',
                                           'estimated_color', 'ibu', 'ibu_method', 'abv', 'og', 'fg', 'co2'])
     full_fermentables_df = pd.DataFrame(columns = ['recipe_id', 'recipe_name',  'fermentable_name', 'fermentables_origin', 'fermentable_type', 'fermentable_amount', 'fermentable_after_boil'])
     full_mash_df = pd.DataFrame(columns = ['recipe_id', 'recipe_name', 'mash_name', 'mash_step', 'mash_type', 'mash_time', 'mash_temp'])
@@ -108,7 +109,7 @@ def split_and_print_recipes(recipes, output_path_base):
         # Recipe Metadata
         this_metadata_df = pd.Series(this_recipe)
         this_metadata_df['recipe_id'] = this_recipe_id
-        this_metadata_df.rename(index = {'NAME': 'recipe_name', 'TYPE':'recipe_type', 'BREWER': 'brewer',  'RATING':'review_score',
+        this_metadata_df.rename(index = {'NAME': 'recipe_name', 'TYPE':'recipe_type', 'BREWER':'brewer',  'CREATION_DATE':'creation_date','RATING':'review_score',
                                  'NUMBER_OF_REVIEWS':'review_count','BATCH_SIZE':'batch_size', 'BOIL_SIZE':'boil_size', 'BOIL_TIME':'boil_time',
                                  'EST_COLOR':'estimated_color', 'IBU':'ibu', 'IBU_METHOD':'ibu_method', 'EST_ABV':'abv', 'OG':'og',
                                  'FG':'fg', 'CARBONATION_USED':'co2'}, inplace = True) 
@@ -298,19 +299,37 @@ def get_data_from_brewersfriend(output_path_base, chunk_percent = 0.005):
                 try:
                     this_review_request = requests.get(this_review_url, headers = this_user_agent)
                     this_review_content = str(this_review_request.content)
-                    this_review_score = float(re.search(r'<span itemprop="ratingValue">(.*?)</span>', str(this_review_content)).group(1))
-                    this_review_count = int(re.search(r'<span itemprop="reviewCount">(.*?)</span>', str(this_review_content)).group(1))
                     
-                    this_recipe_dict['RECIPES']['RECIPE']['RATING'] = this_review_score
-                    this_recipe_dict['RECIPES']['RECIPE']['NUMBER_OF_REVIEWS'] = this_review_count
-                    
+                    try:
+                        this_review_score = float(re.search(r'<span itemprop="ratingValue">(.*?)</span>', str(this_review_content)).group(1))
+                        this_review_count = int(re.search(r'<span itemprop="reviewCount">(.*?)</span>', str(this_review_content)).group(1))
+                        
+                        this_recipe_dict['RECIPES']['RECIPE']['RATING'] = this_review_score
+                        this_recipe_dict['RECIPES']['RECIPE']['NUMBER_OF_REVIEWS'] = this_review_count
+                        
+                    except Exception as E:
+                    #    print(f'Unable to obtain review score for recipe id {i}.\n'
+                    #          f'Error is: {E}.\n')
+                        this_recipe_dict['RECIPES']['RECIPE']['RATING'] = np.NAN
+                        this_recipe_dict['RECIPES']['RECIPE']['NUMBER_OF_REVIEWS'] = np.NAN
+                            
+                    try:
+                         this_creation_date = str(re.search(r'Created: (.*?)\\t', str(this_review_content)).group(1)) #Creation dates should all follow the format "Created: [WeekDay] [Month] [Day] [Year]\t" 
+                         this_creation_date = np.datetime64(parse(this_creation_date)) # Parses format from brewersfriend and converts to numpy datetime64 for easier pandas integration
+                         this_recipe_dict['RECIPES']['RECIPE']['CREATION_DATE'] = this_creation_date
+                         
+                    except Exception as E:
+                         print(f'Unable to obtain creation date for recipe id {i}.\n'
+                               f'Error is: {E}.\n')
+                         this_recipe_dict['RECIPES']['RECIPE']['CREATION_DATE'] = np.datetime64()
+                         
                 except Exception as E:
-                #    print(f'Unable to obtain review score for recipe id {i}.\n'
-                #          f'Error is: {E}.\n')
+                    #    print(f'Unable to load main review page for recipe id id {i}.\n'
+                    #          f'Error is: {E}.\n')
                     this_recipe_dict['RECIPES']['RECIPE']['RATING'] = np.NAN
                     this_recipe_dict['RECIPES']['RECIPE']['NUMBER_OF_REVIEWS'] = np.NAN
-                        
-            
+                    this_recipe_dict['RECIPES']['RECIPE']['CREATION_DATE'] = np.datetime64()
+                    
             if ((current_attempts_count % chunk_size) == 0) or ((i == (total_recipe_pages)) and (rid == these_recipe_ids[-1])): # Every Chunk %, give a progress report, print current output, and clear up some memory
                 print(f'Completed {round(100 * current_attempts_count / total_recipe_count, 2)}% of Recipe Requests.')
                 split_and_print_recipes(recipes, output_path_base)
